@@ -52,7 +52,8 @@ def sample_visible_stars(along, orbit, rng, *, xp=np, projection=None, evaluate=
     px, py = x.astype(int), y.astype(int)
     star_along, star_orbit = projection(px, py) if projection else (along[py, px], orbit[py, px])
     volume = xp.asarray(rng.uniform(0.03**3, 12.0**3, x.size))
-    if projection is not None:
+    cuda_sampling = projection is not None and xp is not np
+    if cuda_sampling:
         magnitude_bin = xp.searchsorted(xp.asarray(GCNS_CDF), xp.asarray(rng.random(x.size)), side="right")
         absolute_g = magnitude_bin - 3 + xp.asarray(rng.random(x.size))
     else:
@@ -75,7 +76,7 @@ def sample_visible_stars(along, orbit, rng, *, xp=np, projection=None, evaluate=
     eligible = xp.flatnonzero(apparent_g < 22.8)
     eligible_weights = weights[eligible]
     count = min(star_count, eligible.size)
-    if projection is not None:
+    if cuda_sampling:
         chosen = eligible[weighted_sample(eligible_weights, count, rng, xp)].get()
     else:
         if xp is not np:
@@ -126,7 +127,7 @@ def star_field(stars, dust_column, cloud_light, rng, *, compute=None, scene_scal
     px, py = x.astype(int), y.astype(int)
     local_dust = dust_column[py, px]
     local_light = cloud_light[py, px]
-    if compute is not None:
+    if compute is not None and compute.name == "cuda":
         local_dust, local_light = local_dust.get(), local_light.get()
     extinction = local_dust * behind_cloud
     flux = 10**(-0.4 * (apparent_g - 18.85)) * np.exp(-extinction)

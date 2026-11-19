@@ -1,7 +1,9 @@
 const canvas = document.querySelector("canvas");
 const status = document.querySelector("#status");
 const context = canvas.getContext("2d", { alpha: false });
-const candidate = new URLSearchParams(location.search).get("seed");
+const params = new URLSearchParams(location.search);
+const candidate = params.get("seed");
+const forceCPU = params.get("backend") === "cpu";
 const seed = /^[0-9a-f]{40}$/i.test(candidate ?? "")
   ? candidate.toLowerCase()
   : Array.from(crypto.getRandomValues(new Uint8Array(20)), byte =>
@@ -9,7 +11,7 @@ const seed = /^[0-9a-f]{40}$/i.test(candidate ?? "")
 
 canvas.dataset.seed = seed;
 canvas.dataset.state = "loading";
-const worker = new Worker(new URL("./render-worker.js", import.meta.url), { type: "module" });
+const worker = new Worker(new URL("./render-worker.js?v=webgpu-1", import.meta.url), { type: "module" });
 let pending = false;
 let hasFrame = false;
 let sizeSent;
@@ -29,7 +31,7 @@ function render() {
   if (sizeSent?.[0] === width && sizeSent[1] === height) return;
   sizeSent = [width, height];
   pending = true;
-  worker.postMessage({ seed, width, height });
+  worker.postMessage({ seed, width, height, forceCPU });
 }
 
 function showError(message) {
@@ -60,6 +62,7 @@ worker.addEventListener("message", ({ data }) => {
     context.putImageData(pixels, 0, 0);
     hasFrame = true;
     canvas.dataset.state = "ready";
+    canvas.dataset.backend = data.backend;
     canvas.dataset.renderMs = data.elapsed.toFixed(0);
     status.hidden = true;
     render();

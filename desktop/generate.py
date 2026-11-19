@@ -177,7 +177,7 @@ def prime_placements(probability, compression, outer_scale, occupied, rng, *, mi
     y = rng.integers(height, size=x.size)
     samples = (sampler(x, y) if sampler is not None else
                [field[y, x] for field in (probability, compression, *fields)])
-    if compute is not None:
+    if compute is not None and compute.name == "cuda":
         packed = compute.cp.stack(samples).get()
         samples = [row.astype(field.dtype, copy=False) for row, field in zip(packed, samples, strict=True)]
     chance, pressure, *extra = samples
@@ -334,15 +334,16 @@ def attached_relief(core, rim, visible, lit, compression, outer_scale, occupied,
     """Attach each light accent to a visible, illuminated shoulder of the cloud."""
     height, width = visible.shape
     shape = (max(2, int(width / (26 * scene_scale))), max(2, int(height / (26 * scene_scale))))
-    xp = np if compute is None else compute.cp
-    if compute is None:
+    cuda = compute if compute is not None and compute.name == "cuda" else None
+    xp = np if cuda is None else cuda.cp
+    if cuda is None:
         smooth = Image.fromarray(visible.astype(np.float32)).resize(shape, Image.Resampling.BILINEAR)
         visible = np.asarray(smooth.resize((width, height), Image.Resampling.BILINEAR))
     else:
-        visible = compute.bilinear(compute.bilinear(visible, shape), (width, height))
+        visible = cuda.bilinear(cuda.bilinear(visible, shape), (width, height))
     band = core - 0.58 * rim * (1 - core)
-    if compute is not None and compute.fast:
-        dy, dx, front, light_side, transition = compute.relief_front(
+    if cuda is not None and cuda.fast:
+        dy, dx, front, light_side, transition = cuda.relief_front(
             visible, band, core, rim, lit, width, height, width * scene_scale
         )
     else:
@@ -508,8 +509,10 @@ def nebula_emission(rgb, bands, sky_x, sky_y, orbit, dust, gradients, rng, star_
     warped_x = sky_x + 0.042 * broad + 0.012 * folds
     warped_y = orbit + 0.062 * broad + 0.026 * folds
     compositor = compute if compute is not None and compute.name == "cuda" else None
+    rasterizer = compute if compute is not None and compute.name in ("cuda", "webgpu") else None
+    layers = rasterizer if rasterizer is not None and rasterizer.optimized else None
     xp = np if compositor is None else compositor.cp
-    fused = compositor is not None and compositor.optimized
+    fused = layers is not None
     transmission = xp.ones(rgb.shape, dtype=rgb.dtype)
     light = xp.zeros_like(transmission)
     dust_column = xp.zeros_like(orbit, dtype=np.float32 if fused else orbit.dtype)
@@ -523,7 +526,7 @@ def nebula_emission(rgb, bands, sky_x, sky_y, orbit, dust, gradients, rng, star_
         from wallpaper_compute import ScaleNeighbors
 
         occupied = ScaleNeighbors(orbit.shape[1] / WALLPAPER_SIZE[0] * scene_scale,
-                                  cache=fused and compositor.fast)
+                                  cache=(fused and layers.fast) or compute.name == "webgpu")
     detail_rng = np.random.Generator(rng.bit_generator.jumped())
     relief_rng = np.random.Generator(rng.bit_generator.jumped(2))
     for depth, index in enumerate((*order, 4)):
@@ -541,7 +544,7 @@ def nebula_emission(rgb, bands, sky_x, sky_y, orbit, dust, gradients, rng, star_
         cavity_strength = 0.77 if index in (0, 2) else 0.26
         if fused:
             (envelope, cavity, compression, damping, core_weight, rim_zone,
-             diffuse_gas, definition, broad_light, lit) = compositor.layer_geometry(
+             diffuse_gas, definition, broad_light, lit) = layers.layer_geometry(
                 warped_x, warped_y, slab, folds, broad, star_density, center_x, center_y,
                 span_x, span_y, tilt, offset_x, offset_y, width_x, width_y, strength, cavity_strength
             )
@@ -567,14 +570,14 @@ def nebula_emission(rgb, bands, sky_x, sky_y, orbit, dust, gradients, rng, star_
         outer_scale = 1.35 * np.sqrt(span_x * span_y * width_x * width_y)
         turbulent = turbulence_field(sky_x + 3.1 * depth, sky_y - 2.7 * depth,
                                      gradients, outer_scale, damping, 1.88 + 0.04 * depth)
-        dust_bands = (core_weight, rim_zone) if version == 2 and fused and compositor.fast else None
+        dust_bands = (core_weight, rim_zone) if version == 2 and compositor is not None and compositor.fast else None
         hue_gradient = (xp.gradient(core_weight - 0.58 * rim_zone * (1 - core_weight))
                         if version == 2 and dust_bands is None else None)
         details = irregularity_field(envelope, compression, star_density, outer_scale, occupied, detail_rng,
-                                     hue_gradient=hue_gradient, fine=fine, compute=compositor, bands=dust_bands,
+                                     hue_gradient=hue_gradient, fine=fine, compute=rasterizer, bands=dust_bands,
                                      scene_scale=scene_scale)
         if fused:
-            opacity, dust_depth, visible = compositor.layer_density(
+            opacity, dust_depth, visible = layers.layer_density(
                 diffuse_gas, definition, turbulent, details, envelope, cavity, dust, slab,
                 compression, cavity_strength, broad_light, transmission
             )
@@ -589,16 +592,16 @@ def nebula_emission(rgb, bands, sky_x, sky_y, orbit, dust, gradients, rng, star_
             if not fused:
                 visible = opacity[..., 0] * broad_light * transmission.mean(axis=2) * xp.exp(-dust_depth)
             relief = attached_relief(core_weight, rim_zone, visible, lit, compression, outer_scale,
-                                     occupied, relief_rng, compute=compositor, scene_scale=scene_scale)
+                                     occupied, relief_rng, compute=rasterizer, scene_scale=scene_scale)
         else:
             relief = corridor_relief(core_weight, rim_zone, lit, compression, outer_scale, occupied, relief_rng)
         indices = detail_rng.permutation(3)
         fill, core, rim = shadow_bands[indices]
         fill_shift, core_shift, rim_shift = (light_bands - shadow_bands)[indices]
         if fused:
-            compositor.layer_composite(
+            layers.layer_composite(
                 core_weight, rim_zone, definition, broad_light, relief, opacity[..., 0], dust_depth,
-                cavity, details, cavity_strength, compositor.array((fill, core, rim, fill_shift, core_shift, rim_shift)),
+                cavity, details, cavity_strength, layers.array((fill, core, rim, fill_shift, core_shift, rim_shift)),
                 light, transmission, dust_column
             )
             continue
@@ -622,11 +625,11 @@ def nebula_emission(rgb, bands, sky_x, sky_y, orbit, dust, gradients, rng, star_
             transmission *= (1 - opacity) * dust_transmittance(dust_depth, color, shadow)
     if version == 2:
         phase_x, phase_y = rng.uniform(0, 2 * np.pi, 2)
-        if fused and compositor.fast:
+        if compositor is not None and compositor.fast:
             phase_x, phase_y = float(phase_x), float(phase_y)
         drift = 0.010 * (0.65 * xp.sin(8 * sky_x + 3 * sky_y + phase_x)
                          + 0.35 * xp.sin(3 * sky_x - 9 * sky_y + phase_y))
-        shifted = compositor.hue_shift(light, drift) if fused and compositor.fast else hue_shift(light, drift, xp)
+        shifted = compositor.hue_shift(light, drift) if compositor is not None and compositor.fast else hue_shift(light, drift, xp)
         light, _ = color_accents(shifted, orbit, rng, compute=compositor, scene_scale=scene_scale)
     return light + rgb * transmission, dust_column, light
 
@@ -666,8 +669,8 @@ def texture(sha, colors=None, *, size=(WIDTH, HEIGHT), animated=True, wallpaper_
     cosine, sine = float(np.cos(angle)), float(np.sin(angle))
     warp_x, warp_y = rng.uniform(0, 90, 2).tolist()
     phase = rng.uniform(0, 6)
+    geometry = (cosine, sine, warp_x, warp_y, phase, 1.0 / scene_scale)
     if fast:
-        geometry = (cosine, sine, warp_x, warp_y, phase, 1.0 / scene_scale)
         u, orbit, mist, dust = device.projection((height, width), gradients, geometry)
 
         def star_projection(x, y):
@@ -683,7 +686,11 @@ def texture(sha, colors=None, *, size=(WIDTH, HEIGHT), animated=True, wallpaper_
         dust = fractal_field(9 * u + 16, 13 * v - 38, gradients, 3, 0.38)
         center = 0.037 * xp.sin(6 * u + phase)
         orbit = v - center + 0.028 * mist
-        star_projection = None
+        if compute is not None and compute.name == "webgpu":
+            def star_projection(x, y):
+                return compute.star_projection(x, y, gradients, width, height, geometry)
+        else:
+            star_projection = None
     offset = rng.uniform(-0.25, 0.26)
     if fast:
         rgb = xp.empty((*u.shape, 3), dtype=dtype)
@@ -732,7 +739,8 @@ def texture(sha, colors=None, *, size=(WIDTH, HEIGHT), animated=True, wallpaper_
     fixed = (4 * gloss[crop])[..., None] * xp.asarray((0.91, 0.94, 1), dtype=dtype)
     if not animated:
         optics_rng = np.random.default_rng(int.from_bytes(key[16:24], "big"))
-        fixed = 0.81 * fixed + star_field(stars, dust_column, cloud_light, optics_rng, compute=device,
+        rasterizer = compute if compute is not None and compute.name in ("cuda", "webgpu") else None
+        fixed = 0.81 * fixed + star_field(stars, dust_column, cloud_light, optics_rng, compute=rasterizer,
                                          scene_scale=scene_scale)
         fixed += xp.asarray(grain.result() if grain is not None else rng.normal(0, 0.42, (height, width, 1)),
                             dtype=dtype)
