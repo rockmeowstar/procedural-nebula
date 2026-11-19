@@ -4,7 +4,7 @@ const engineFiles = ["generate.py", "milky_way.py", "wallpaper_compute.py"];
 
 async function loadEngine() {
   const sources = Promise.all(engineFiles.map(async filename => {
-    const response = await fetch(new URL(`./desktop/${filename}`, import.meta.url));
+    const response = await fetch(new URL(`./desktop/${filename}`, import.meta.url), { cache: "no-cache" });
     if (!response.ok) throw new Error(`Could not load ${filename}: ${response.status}`);
     return response.text();
   }));
