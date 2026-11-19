@@ -944,9 +944,9 @@ def wallpaper_variation(seed):
     return rng.uniform(0.8, 1.2), round(REFERENCE_STAR_COUNT * rng.uniform(0.7, 1.0))
 
 
-def wallpaper_image(seed, version, fine, compute, uniform_palette=False, target_hue=None):
+def wallpaper_image(seed, version, fine, compute, uniform_palette=False, target_hue=None, *, size=WALLPAPER_SIZE):
     scene_scale, star_count = wallpaper_variation(seed) if version == 5 else (1.0, REFERENCE_STAR_COUNT)
-    fog, stars, _ = texture(seed, size=WALLPAPER_SIZE, animated=False, wallpaper_version=min(version, 2),
+    fog, stars, _ = texture(seed, size=size, animated=False, wallpaper_version=min(version, 2),
                             fine=fine, compute=compute, uniform_palette=uniform_palette, target_hue=target_hue,
                             scene_scale=scene_scale, star_count=star_count)
     if compute is not None and compute.name == "cuda":
