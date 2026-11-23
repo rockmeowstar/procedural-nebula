@@ -206,9 +206,10 @@ __device__ void splat_pixel(const double* patches, const int* offsets, const int
 #endif
             radius_sq *= 1 + p[7] * skew;
             const double pi = 3.141592653589793;
-            double psf = 0.951 * exp(-radius_sq / (2 * 0.85 * 0.85)) / (2 * pi * (0.85 * 0.85));
-            psf += 0.042 * exp(-radius_sq / (2 * 2.2 * 2.2)) / (2 * pi * (2.2 * 2.2));
-            psf += 0.007 * exp(-radius_sq / (2 * 5.2 * 5.2)) / (2 * pi * (5.2 * 5.2));
+            double core = 0.85 * 0.85 + p[12], inner = 2.2 * 2.2 + p[12], outer = 5.2 * 5.2 + p[12];
+            double psf = 0.951 * exp(-radius_sq / (2 * core)) / (2 * pi * core);
+            psf += 0.042 * exp(-radius_sq / (2 * inner)) / (2 * pi * inner);
+            psf += 0.007 * exp(-radius_sq / (2 * outer)) / (2 * pi * outer);
             double received = p[8] * psf;
             total += received;
             double wing = -expm1(-0.31 * (radius_sq * radius_sq));
@@ -291,6 +292,11 @@ void projection(const int* px, const int* py, const double* gradients, const dou
     double x = sparse ? px[i] : i % width, y = sparse ? py[i] : i / width;
     double sx = ((x - width / 2.0) / width) * geometry[5];
     double sy = ((y - height / 2.0) / width) * geometry[5];
+    if (geometry[6] != 0) {
+        double across = -sx;
+        sx = sy;
+        sy = across;
+    }
     double u = sx * geometry[0] - sy * geometry[1], v = sx * geometry[1] + sy * geometry[0];
     double wx = octave_field(2.4 * u + geometry[2], 2.4 * v + geometry[3], gradients, weights, 5);
     double wy = octave_field(2.4 * u + geometry[3], (2.4 * v + geometry[2]) + 17, gradients, weights, 5);

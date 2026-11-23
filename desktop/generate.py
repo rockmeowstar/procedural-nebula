@@ -500,7 +500,7 @@ def color_accents(light, orbit, rng, *, compute=None, scene_scale=1.0):
 
 
 def nebula_emission(rgb, bands, sky_x, sky_y, orbit, dust, gradients, rng, star_density, version=1, fine=False,
-                    compute=None, scene_scale=1.0):
+                    compute=None, scene_scale=1.0, resolution_scale=None, frame_extent=(1.0, 1.0)):
     """Project overlapping clouds, foreground dust and cavities along the line of sight."""
     fractal_field = fractal if compute is None else compute.fractal
     turbulence_field = nebula_turbulence if compute is None else compute.turbulence
@@ -518,24 +518,29 @@ def nebula_emission(rgb, bands, sky_x, sky_y, orbit, dust, gradients, rng, star_
     dust_column = xp.zeros_like(orbit, dtype=np.float32 if fused else orbit.dtype)
     shadow_bands, light_bands = band_light_and_shadow(bands)
 
-    # Four irregular, intersecting volumes in random depth order plus a diffuse rear layer.
-    centers = np.linspace(-0.36, 0.36, 4) + rng.uniform(-0.085, 0.085, 4)
-    order = rng.permutation(4)
+    # Populate the available area with more volumes while preserving each volume's optical scale.
+    long_extent, short_extent = frame_extent
+    layer_count = max(4, min(12, round(4 * long_extent * short_extent)))
+    centers = np.linspace(-0.36 * long_extent, 0.36 * long_extent, layer_count)
+    centers += rng.uniform(-0.085, 0.085, layer_count)
+    order = rng.permutation(layer_count)
     occupied = {}
     if compute is not None:
         from wallpaper_compute import ScaleNeighbors
 
-        occupied = ScaleNeighbors(orbit.shape[1] / WALLPAPER_SIZE[0] * scene_scale,
+        pixel_scale = orbit.shape[1] / WALLPAPER_SIZE[0] if resolution_scale is None else resolution_scale
+        occupied = ScaleNeighbors(pixel_scale * scene_scale,
                                   cache=(fused and layers.fast) or compute.name == "webgpu")
     detail_rng = np.random.Generator(rng.bit_generator.jumped())
     relief_rng = np.random.Generator(rng.bit_generator.jumped(2))
-    for depth, index in enumerate((*order, 4)):
+    for depth, index in enumerate((*order, layer_count)):
         slab = fractal_field(10 * sky_x + 17 * depth, 13 * sky_y - 23 * depth, gradients, 3, 0.51)
-        if index == 4:
+        if index == layer_count:
             center_x, center_y, span_x, span_y = 0.0, 0.0, 0.47, 0.15
             strength = 0.22
         else:
-            center_x, center_y = centers[index], rng.uniform(-0.095, 0.095)
+            center_x = centers[index]
+            center_y = rng.uniform(-0.095, 0.095) * max(1.0, short_extent)
             span_x, span_y = rng.uniform(0.13, 0.25), rng.uniform(0.065, 0.143)
             strength = rng.uniform(0.63, 0.95)
         tilt = rng.uniform(-0.48, 0.48)
@@ -644,7 +649,8 @@ def add_starlight(fixed, twinkle, region, light, rng):
 
 
 def texture(sha, colors=None, *, size=(WIDTH, HEIGHT), animated=True, wallpaper_version=2, fine=False, compute=None,
-            uniform_palette=False, target_hue=None, scene_scale=1.0, star_count=REFERENCE_STAR_COUNT):
+            uniform_palette=False, target_hue=None, scene_scale=1.0, star_count=REFERENCE_STAR_COUNT,
+            adapt_resolution=False):
     fractal_field = fractal if compute is None else compute.fractal
     device = compute if compute is not None and compute.name == "cuda" else None
     xp = np if device is None else device.cp
@@ -659,17 +665,34 @@ def texture(sha, colors=None, *, size=(WIDTH, HEIGHT), animated=True, wallpaper_
     phase = rng.uniform(0, 2 * np.pi, (128, 128))
     gradients = np.stack((np.cos(phase), np.sin(phase)), axis=-1)
     width, height = size
+    reference_width, reference_height = WALLPAPER_SIZE
+    resolution_scale, camera_pixel_scale = None, None
+    frame_extent, camera_scale = (1.0, 1.0), 1.0
+    portrait = adapt_resolution and height > width
+    if adapt_resolution:
+        resolution_scale = np.sqrt(width * height / (reference_width * reference_height))
+        long_side, short_side = max(width, height), min(width, height)
+        long_ratio = long_side / reference_width
+        short_ratio = short_side / reference_height
+        # Use one pixel scale on both axes, with a bounded field of view for extreme formats.
+        camera_pixel_scale = max(min(long_ratio, short_ratio), long_ratio / 3)
+        frame_extent = (long_ratio / camera_pixel_scale, short_ratio / camera_pixel_scale)
+        camera_scale = width / (reference_width * camera_pixel_scale)
+    optical_scale = scene_scale if resolution_scale is None else scene_scale * resolution_scale
     pad_x, pad_y = (FOG_PAD_X, FOG_PAD_Y) if animated else (0, 0)
     y, x = xp.mgrid[-pad_y:height + pad_y, -pad_x:width + pad_x].astype(dtype)
     sx, sy = (x - width / 2) / width, (y - height / 2) / width
-    if scene_scale != 1.0:
-        sx *= 1.0 / scene_scale
-        sy *= 1.0 / scene_scale
+    if portrait:
+        sx, sy = sy, -sx
+    projection_scale = camera_scale / scene_scale
+    if projection_scale != 1.0:
+        sx *= projection_scale
+        sy *= projection_scale
     angle = rng.uniform(-0.38, 0.38)
     cosine, sine = float(np.cos(angle)), float(np.sin(angle))
     warp_x, warp_y = rng.uniform(0, 90, 2).tolist()
     phase = rng.uniform(0, 6)
-    geometry = (cosine, sine, warp_x, warp_y, phase, 1.0 / scene_scale)
+    geometry = (cosine, sine, warp_x, warp_y, phase, projection_scale, float(portrait))
     if fast:
         u, orbit, mist, dust = device.projection((height, width), gradients, geometry)
 
@@ -712,11 +735,11 @@ def texture(sha, colors=None, *, size=(WIDTH, HEIGHT), animated=True, wallpaper_
         stars = sample_visible_stars(u, orbit, rng, xp=xp, projection=star_projection,
                                     evaluate=device.star_candidates if fast else None, star_count=star_count)
         grain = device.grain_worker.submit(rng.normal, 0, 0.42, (height, width, 1)) if fast else None
-        density_map = star_density_map(stars, orbit.shape, compute=device, scene_scale=scene_scale)
+        density_map = star_density_map(stars, orbit.shape, compute=device, scene_scale=optical_scale)
         cloud_x, cloud_y, cloud_orbit, cloud_dust = (field.astype(dtype, copy=False) for field in (sx, sy, orbit, dust))
         rgb, dust_column, cloud_light = nebula_emission(rgb, bands, cloud_x, cloud_y, cloud_orbit, cloud_dust,
                                                         gradients, scene_rng, density_map, wallpaper_version,
-                                                        fine, compute, scene_scale)
+                                                        fine, compute, scene_scale, camera_pixel_scale, frame_extent)
     # The cloud's light moves with the fog, while the print reflection stays fixed.
     rgb += (11 * core)[..., None] * xp.asarray((0.91, 0.94, 1), dtype=dtype)
     if not animated and uniform_palette:
@@ -740,8 +763,10 @@ def texture(sha, colors=None, *, size=(WIDTH, HEIGHT), animated=True, wallpaper_
     if not animated:
         optics_rng = np.random.default_rng(int.from_bytes(key[16:24], "big"))
         rasterizer = compute if compute is not None and compute.name in ("cuda", "webgpu") else None
+        # Approximate the extra area covered by an output pixel below the reference resolution.
+        pixel_variance = max(0.0, 1.0 - resolution_scale**2) / 12 if resolution_scale is not None else 0.0
         fixed = 0.81 * fixed + star_field(stars, dust_column, cloud_light, optics_rng, compute=rasterizer,
-                                         scene_scale=scene_scale)
+                                         scene_scale=optical_scale, pixel_variance=pixel_variance)
         fixed += xp.asarray(grain.result() if grain is not None else rng.normal(0, 0.42, (height, width, 1)),
                             dtype=dtype)
         return fog, fixed, None
@@ -956,7 +981,7 @@ def wallpaper_image(seed, version, fine, compute, uniform_palette=False, target_
     scene_scale, star_count = wallpaper_variation(seed) if version == 5 else (1.0, REFERENCE_STAR_COUNT)
     fog, stars, _ = texture(seed, size=size, animated=False, wallpaper_version=min(version, 2),
                             fine=fine, compute=compute, uniform_palette=uniform_palette, target_hue=target_hue,
-                            scene_scale=scene_scale, star_count=star_count)
+                            scene_scale=scene_scale, star_count=star_count, adapt_resolution=version == 5)
     if compute is not None and compute.name == "cuda":
         pixels = compute.cp.clip(fog + stars, 0, 255).astype(np.uint8).get()
     else:

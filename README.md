@@ -10,3 +10,18 @@
 python -m pip install -r desktop/requirements.txt
 python desktop/generate.py --wallpaper wallpapers --wallpaper-count 10
 ```
+
+## REST API на CUDA
+
+```sh
+python desktop/api.py
+curl "http://127.0.0.1:8766/api/nebula?width=2560&height=1440" -o nebula.png
+```
+
+`GET /api/nebula` принимает `width` и `height` в пикселях и возвращает PNG с теми же размерами. Добавь `seed` из 40 шестнадцатеричных символов, чтобы повторить кадр. Фактический seed возвращается в `X-Nebula-Seed`. Максимальный размер — 8 294 400 пикселей, максимум 8192 по каждой стороне.
+
+Открой `http://127.0.0.1:8766/`, чтобы показать туманность на весь экран. Эта страница передаёт размеры видимой области в API. При прямом запросе добавь `format=jpeg` для JPEG. По умолчанию API возвращает PNG.
+
+Браузер передаёт разрешение явно. Для полного экрана можно взять `Math.round(screen.width * devicePixelRatio)` и `Math.round(screen.height * devicePixelRatio)`, для видимой области — `innerWidth` и `innerHeight`. Строка `User-Agent` не содержит этих размеров.
+
+Для запуска нужен CuPy с NVRTC и рабочая CUDA. Сервер выполняет запросы последовательно с одним прогретым CUDA-контекстом. `GET /healthz` показывает используемый бэкенд. По умолчанию порт доступен только с локального ПК. Параметры `--host` и `--port` задают адрес и порт. Сервис рассчитан на локальный ПК или доверенную сеть.

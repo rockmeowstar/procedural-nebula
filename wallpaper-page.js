@@ -11,7 +11,7 @@ const seed = /^[0-9a-f]{40}$/i.test(candidate ?? "")
 
 canvas.dataset.seed = seed;
 canvas.dataset.state = "loading";
-const worker = new Worker(new URL("./render-worker.js?v=webgpu-1", import.meta.url), { type: "module" });
+const worker = new Worker(new URL("./render-worker.js?v=5.1.0", import.meta.url), { type: "module" });
 let pending = false;
 let hasFrame = false;
 let sizeSent;

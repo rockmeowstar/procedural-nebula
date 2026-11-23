@@ -150,7 +150,7 @@ export async function createNoiseDevice() {
 }
 
 // The discrete star catalogue selection uses double precision, as the CUDA v5 sparse projection does.
-export function projectStars(px, py, grid, width, height, cosine, sine, warpX, warpY, phase, scale) {
+export function projectStars(px, py, grid, width, height, cosine, sine, warpX, warpY, phase, scale, portrait) {
   return withViews([px, py, grid], ["i32", "i32", "f64"], (xs, ys, gradients) => {
     function corner(x, y, dx, dy) {
       const i = 2 * ((y & 127) * 128 + (x & 127));
@@ -189,13 +189,14 @@ export function projectStars(px, py, grid, width, height, cosine, sine, warpX, w
         projected[count + i] = cache[pixel + 1];
         continue;
       }
-      const x = ((xs[i] - width / 2) / width) * scale;
-      const y = ((ys[i] - height / 2) / width) * scale;
+      const dx = ((xs[i] - width / 2) / width) * scale;
+      const dy = ((ys[i] - height / 2) / width) * scale;
+      const x = portrait ? dy : dx, y = portrait ? -dx : dy;
       let u = x * cosine - y * sine, v = x * sine + y * cosine;
-      const dx = fractal(2.4 * u + warpX, 2.4 * v + warpY, warp);
-      const dy = fractal(2.4 * u + warpY, 2.4 * v + warpX + 17, warp);
-      u += 0.33 * dx;
-      v += 0.14 * dy;
+      const noiseX = fractal(2.4 * u + warpX, 2.4 * v + warpY, warp);
+      const noiseY = fractal(2.4 * u + warpY, 2.4 * v + warpX + 17, warp);
+      u += 0.33 * noiseX;
+      v += 0.14 * noiseY;
       projected[i] = u;
       projected[count + i] = v - 0.037 * Math.sin(6 * u + phase)
         + 0.028 * fractal(4 * u + 52, 6 * v + 10, mist);

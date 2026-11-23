@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Процедурная туманность</title>
+<style>
+  html { color-scheme: dark; }
+  body { margin: 0; min-height: 100dvh; background: #050711; color: #e4e8f7;
+         font: 15px system-ui, sans-serif; }
+  #frame { position: fixed; inset: 0; display: grid; place-items: center; }
+  #frame img { display: block; width: 100%; height: 100%; min-height: 0; object-fit: contain; }
+  #status { position: fixed; inset: 50% 1rem auto; margin: 0; text-align: center;
+            pointer-events: none; }
+  #frame:has(img) ~ #status:not([hidden]) { inset: auto 1rem 4.6rem; text-shadow: 0 1px 5px #000; }
+  button { position: fixed; bottom: max(1.2rem, env(safe-area-inset-bottom));
+           inset-inline-start: 50%; transform: translateX(-50%); border: 1px solid #5d6581;
+           border-radius: .65rem; background: #101827; color: inherit; padding: .65rem 1rem;
+           font: inherit; white-space: nowrap; cursor: pointer; }
+  button:disabled { opacity: .7; cursor: wait; }
+</style>
+<main id="frame"></main>
+<p id="status" role="status">Загружается туманность…</p>
+<button id="next" type="button" disabled>Новая туманность</button>
+<script>
+  const frame = document.querySelector("#frame");
+  const status = document.querySelector("#status");
+  const next = document.querySelector("#next");
+  const requested = new URLSearchParams(location.search);
+  let visibleUrl;
+  let visibleSeed;
+  let visibleSize;
+  let rendering = false;
+  let resizePending = false;
+  let resizeTimer;
+
+  function viewportParams() {
+    const params = new URLSearchParams(requested);
+    params.delete("seed");
+    params.set("format", "jpeg");
+    const ratio = window.devicePixelRatio || 1;
+    const width = Math.max(2, Math.round(window.innerWidth * ratio));
+    const height = Math.max(2, Math.round(window.innerHeight * ratio));
+    const scale = Math.min(1, 8192 / width, 8192 / height, Math.sqrt(3840 * 2160 / (width * height)));
+    if (!params.has("width")) params.set("width", Math.max(2, Math.floor(width * scale)));
+    if (!params.has("height")) params.set("height", Math.max(2, Math.floor(height * scale)));
+    return params;
+  }
+
+  function sizeKey(params) {
+    return params.get("width") + "×" + params.get("height");
+  }
+
+  function fitToViewport() {
+    if (rendering) {
+      resizePending = true;
+      return;
+    }
+    const params = viewportParams();
+    if (sizeKey(params) !== visibleSize) {
+      showFrame(params, visibleSeed ?? requested.get("seed"));
+    }
+  }
+
+  async function showFrame(params, seed) {
+    rendering = true;
+    next.disabled = true;
+    status.hidden = false;
+    status.textContent = "Загружается туманность…";
+    if (seed !== null) params.set("seed", seed);
+
+    let pendingUrl;
+    try {
+      const response = await fetch("/api/nebula?" + params, { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error(response.status === 503 ? "Генератор занят. Попробуй ещё раз." :
+          "Не удалось получить изображение (" + response.status + ").");
+      }
+      pendingUrl = URL.createObjectURL(await response.blob());
+      const image = new Image();
+      image.alt = "Процедурная туманность";
+      image.src = pendingUrl;
+      await image.decode();
+
+      frame.replaceChildren(image);
+      if (visibleUrl) URL.revokeObjectURL(visibleUrl);
+      visibleUrl = pendingUrl;
+      visibleSeed = response.headers.get("X-Nebula-Seed");
+      visibleSize = sizeKey(params);
+      pendingUrl = undefined;
+      status.hidden = true;
+    } catch (error) {
+      status.textContent = error.message || "Не удалось загрузить туманность.";
+    } finally {
+      if (pendingUrl) URL.revokeObjectURL(pendingUrl);
+      rendering = false;
+      next.disabled = false;
+      if (resizePending) {
+        resizePending = false;
+        fitToViewport();
+      }
+    }
+  }
+
+  next.addEventListener("click", () => showFrame(viewportParams(), null));
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(fitToViewport, 200);
+  });
+  fitToViewport();
+</script>
+</html>

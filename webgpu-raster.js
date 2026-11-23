@@ -102,9 +102,12 @@ fn raster(@builtin(global_invocation_id) id: vec3u) {
             let skew = u * (u2 - 2.3 * v2) / (base * sqrt(base));
             r2 *= 1 + patches[p + 7] * skew;
             let tau = 6.283185307179586;
-            let psf = 0.951 * exp(-r2 / (2 * 0.85 * 0.85)) / (tau * 0.85 * 0.85)
-                + 0.042 * exp(-r2 / (2 * 2.2 * 2.2)) / (tau * 2.2 * 2.2)
-                + 0.007 * exp(-r2 / (2 * 5.2 * 5.2)) / (tau * 5.2 * 5.2);
+            let core = 0.85 * 0.85 + patches[p + 12];
+            let inner = 2.2 * 2.2 + patches[p + 12];
+            let outer = 5.2 * 5.2 + patches[p + 12];
+            let psf = 0.951 * exp(-r2 / (2 * core)) / (tau * core)
+                + 0.042 * exp(-r2 / (2 * inner)) / (tau * inner)
+                + 0.007 * exp(-r2 / (2 * outer)) / (tau * outer);
             let received = patches[p + 8] * psf;
             total += received;
             let wing = oneMinusExp(0.31 * (r2 * r2));

@@ -1,6 +1,6 @@
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v0.29.4/full/pyodide.mjs";
-import { createNoiseDevice, projectStars } from "./webgpu-noise.js";
-import { createRaster } from "./webgpu-raster.js";
+import { createNoiseDevice, projectStars } from "./webgpu-noise.js?v=5.1.0";
+import { createRaster } from "./webgpu-raster.js?v=5.1.0";
 import { createLayers } from "./webgpu-layers.js";
 
 const engineFiles = ["generate.py", "milky_way.py", "wallpaper_compute.py"];

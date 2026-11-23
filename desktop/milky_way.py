@@ -117,12 +117,15 @@ def optical_radius(dx, dy, angle, stretch, asymmetry):
     return radius_sq * (1 + asymmetry * skew)
 
 
-def star_field(stars, dust_column, cloud_light, rng, *, compute=None, scene_scale=1.0):
+def star_field(stars, dust_column, cloud_light, rng, *, compute=None, scene_scale=1.0, pixel_variance=0.0):
     x, y, apparent_g, distance = stars
     height, width = dust_column.shape
     # Gaussian approximation to the HST WFC3/UVIS point response. Pixel scale and
     # exposure are illustrative; unresolved stars do not have rendered disks.
-    sigma = 0.85
+    filter_variance = pixel_variance / scene_scale**2
+    core_variance = 0.85**2 + filter_variance
+    inner_variance = 2.2**2 + filter_variance
+    outer_variance = 5.2**2 + filter_variance
     behind_cloud = -np.expm1(-(np.maximum(distance - 0.7, 0) / 2.2)**1.5)
     px, py = x.astype(int), y.astype(int)
     local_dust = dust_column[py, px]
@@ -149,6 +152,7 @@ def star_field(stars, dust_column, cloud_light, rng, *, compute=None, scene_scal
         patches[:, 4], patches[:, 5] = np.cos(angles), np.sin(angles)
         patches[:, 6], patches[:, 7], patches[:, 8] = stretches, asymmetries, flux
         patches[:, 9:12] = edge_colors
+        patches[:, 12] = filter_variance
         patches[:, 17], patches[:, 18] = np.rint(x), np.rint(y)
         return compute.splat((height, width), patches, 2)
     signal = np.zeros((height, width))
@@ -161,9 +165,9 @@ def star_field(stars, dust_column, cloud_light, rng, *, compute=None, scene_scal
         top, bottom = max(0, iy - margin), min(height, iy + margin + 1)
         dy, dx = np.ogrid[top:bottom, left:right]
         radius_sq = optical_radius((dx - sx) / scene_scale, (dy - sy) / scene_scale, angle, stretch, asymmetry)
-        psf = 0.951 * np.exp(-radius_sq / (2 * sigma**2)) / (2 * np.pi * sigma**2)
-        psf += 0.042 * np.exp(-radius_sq / (2 * 2.2**2)) / (2 * np.pi * 2.2**2)
-        psf += 0.007 * np.exp(-radius_sq / (2 * 5.2**2)) / (2 * np.pi * 5.2**2)
+        psf = 0.951 * np.exp(-radius_sq / (2 * core_variance)) / (2 * np.pi * core_variance)
+        psf += 0.042 * np.exp(-radius_sq / (2 * inner_variance)) / (2 * np.pi * inner_variance)
+        psf += 0.007 * np.exp(-radius_sq / (2 * outer_variance)) / (2 * np.pi * outer_variance)
         received = photons * psf
         signal[top:bottom, left:right] += received
         # Taper the local color into the wings and leave the apparent core neutral.
